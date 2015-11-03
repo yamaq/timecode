@@ -26,7 +26,7 @@ function testCalc() {
     # $1 --- mode -a|-s|-f|-t
     # $2 --- fps
     # $3 --- tc|fn
-    # $4 --- tc
+    # $4 --- tc|fn
     # $5 --- answer
     if [ $# -eq 4 ]; then
         ret=$($timecodePath $1 $2 $3)
