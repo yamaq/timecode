@@ -1,0 +1,216 @@
+#!/bin/bash
+#
+# @(#) This script please use when the timecode calculation.
+# @(#)
+# @(#) --- USAGE ---------------------------------------------------------------
+# @(#) timecode -a|-s|-t|-f 24|25|29|30|59|60 tc|fn [tc|fn]
+# @(#) - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+# @(#) timecode -a 30 00:00:30:00 00:00:10:00           # add mode
+# @(#) timecode -a 30 900 00:00:10:00                   # add mode
+# @(#) timecode -a 30 00:00:30:00 300                   # add mode
+# @(#) timecode -s 30 00:00:30:00 00:00:10:00           # sub mode
+# @(#) timecode -s 30 900 00:00:10:00                   # sub mode
+# @(#) timecode -s 30 00:00:30:00 300                   # sub mode
+# @(#) timecode -t 30 300                               # timecode mode
+# @(#) timecode -f 30 00:00:10:00                       # frame number mode
+# @(#) -------------------------------------------------------------------------
+#
+################################################################################
+#
+# NAME                    : timecode
+# CREATOR                 : Hisayuki Yamamoto / yamaq@mount-q.com
+# VERSION                 : 201511030827
+# TESTED BASH VERSION     : GNU bash, version 3.2.57(1)-release / OS X 10.11.1
+#                         : GNU bash, version 4.1.2(1)-release / Cent OS 6.6
+#
+################################################################################
+### VARIABLES
+################################################################################
+#
+supportedFps=(24 25 29 30 59 60)
+#
+################################################################################
+### FUNCTIONS
+################################################################################
+
+function convToFN() {
+    # Convert to frame number(1800) from timecode(00:01:00:00)
+    # $1 --> tc
+    # $2 --> fpsHz
+    # $3 --> fpsCalc
+    local tc frames frameBase
+    if [ $2 -eq 29 -o $2 -eq 59 ]; then  # DF
+        if [ $2 -eq 29 ]; then
+            if [[ "$1" =~ ([0-1][0-9]|[2][0-3]):[0-5][^0]:00:0[0-1] ]]; then
+                tc="${1:0:10}2"  # 00:01:00:00 --> 00:01:00:02
+            else
+                tc="$1"
+            fi
+        else  # 59
+            if [[ "$1" =~ ([0-1][0-9]|[2][0-3]):[0-5][^0]:00:0[0-3] ]]; then
+                tc="${1:0:10}4"  # 00:01:00:00 --> 00:01:00:04
+            else
+                tc="$1"
+            fi
+        fi
+        frameBase=$(( ($3 * 60 - $3 / 15) * 9 + $3 * 60 ))
+        frames=$(( 10#${tc:0:2} * 6 * $frameBase + ${tc:3:1} * $frameBase ))
+        if [ ${tc:4:1} -eq 0 ]; then
+            frames=$(( $frames + 10#${tc:6:2} * $3 + 10#${tc:9:2} ))
+        else
+            frames=$(( $frames + ${tc:4:1} * ($3 * 60 - $3 / 15) ))
+            frames=$(( $frames + 10#${tc:6:2} * $3 + 10#${tc:9:2} ))
+        fi
+    else  # NDF
+        tc="$1"
+        frames=$(( 10#${tc:0:2} * 60 * 60 * $3 ))      # hour
+        frames=$(( $frames + 10#${tc:3:2} * 60 * $3 )) # minute
+        frames=$(( $frames + 10#${tc:6:2} * $3 ))      # second
+        frames=$(( $frames + 10#${tc:9:2} ))           # frame
+    fi
+    echo "$frames"
+    return 0
+}
+
+function convToTC() {
+    # Convert to timecode(00:01:00:00) from frame number(1800)
+    # If fn is over 24H, will be returned 0H.
+    # $1 --> fn
+    # $2 --> fpsHz
+    # $3 --> fpsCalc
+    local hh mm m10 m1 ss ff tc fn dfSequence
+    if [ $2 -eq 29 -o $2 -eq 59 ]; then
+        fn=$(( $1 % (86400 * $3 - ($3 / 15 * 1296)) ))  # To fn is under 24H
+        dfSequence=$(( $fn / (($3 * 60 - $3 / 15) * 9 + $3 * 60) ))
+        hh=$(( $dfSequence / 6 ))
+        m10=$(( $dfSequence % 6 ))
+        fn=$(( $fn % (($3 * 60 - $3 / 15) * 9 + $3 * 60) ))
+        if [ $fn -lt $(( $3 * 60 )) ]; then
+            m1=0
+            ss=$(( $fn / $3 ))
+            ff=$(( $fn % $3 ))
+        else
+            fn=$(( $fn - $3 * 60 ))
+            for i in $(seq 1 9); do
+                if [ $fn -lt $(( $3 * 60 - $3 / 15 )) ]; then
+                    m1=$i
+                    fn=$(( $fn + $3 / 15 ))
+                    ss=$(( $fn / $3 ))
+                    ff=$(( $fn % $3 ))
+                    break
+                fi
+                fn=$(( $fn - ($3 * 60 - $3 / 15) ))
+            done
+        fi
+        printf "%02d:%01d%01d:%02d:%02d\n" $hh $m10 $m1 $ss $ff
+    else
+        hh=$(( ($1 / (3600 * $3)) % 24 ))
+        mm=$(( $1 % (3600 * $3) / (60 * $3) ))
+        ss=$(( ($1 % (3600 * $3)) % (60 * $3) / $3 ))
+        ff=$(( ($1 % (3600 * $3)) % (60 * $3) % $3 ))
+        printf "%02d:%02d:%02d:%02d\n" $hh $mm $ss $ff
+    fi
+    return 0
+}
+
+################################################################################
+### MAIN
+################################################################################
+
+# Check number of args is must be 3 or 4
+if ! [ $# -eq 3 -o $# -eq 4 ]; then
+    echo "Argument error!" 1>&2
+    exit 1
+fi
+
+# Check $2 and set to validTC, fpsCalc
+echo ${supportedFps[@]} | grep "$2" >/dev/null  # Is $2 in supportedFps?
+if [ $? -eq 0 ]; then
+    case "$2" in
+        ${supportedFps[0]} ) validFF="([0-1][0-9]|[2][0-3])" ;;
+        ${supportedFps[1]} ) validFF="([0-1][0-9]|[2][0-4])" ;;
+        ${supportedFps[2]} ) validFF="[0-2][0-9]" ;;
+        ${supportedFps[3]} ) validFF="[0-2][0-9]" ;;
+        ${supportedFps[4]} ) validFF="[0-5][0-9]" ;;
+        ${supportedFps[5]} ) validFF="[0-5][0-9]" ;;
+    esac
+    validTC="([0-1][0-9]|[2][0-3]):[0-5][0-9]:[0-5][0-9]:$validFF"
+    if [ "$2" = "29" ]; then
+        fpsHz="$2"
+        fpsCalc="30"
+    elif [ "$2" = "59" ]; then
+        fpsHz="$2"
+        fpsCalc="60"
+    else
+        fpsHz="$2"
+        fpsCalc="$2"
+    fi
+else
+    echo "fps error!" 1>&2
+    exit 2
+fi
+
+if [ "$1" = "-f" ]; then
+    # Convert to frame number(1800) from timecode(00:01:00:00)
+    if [[ "$3" =~ ^${validTC}$ ]]; then
+        convToFN $3 $fpsHz $fpsCalc
+        exit 0
+    else
+        echo "Timecode error!" 1>&2
+        exit 3
+    fi
+elif [ "$1" = "-t" ]; then
+    if [[ "$3" =~ ^[0-9]+$ ]]; then  # Is $3 number?
+        convToTC $3 $fpsHz $fpsCalc
+        exit 0
+    else
+        echo "Frame number error!" 1>&2
+        exit 4
+    fi
+elif [ "$1" = "-a" -o "$1" = "-s" ]; then
+    # add or sub mode
+    if [[ "$3" =~ ^[0-9]+$ ]]; then
+        first="$3"
+    elif [[ "$3" =~ ^${validTC}$ ]]; then
+        first=$(convToFN $3 $fpsHz $fpsCalc)
+    else
+        echo "Timecode or FN error!" 1>&2
+        exit 5
+    fi
+    if [[ "$4" =~ ^[0-9]+$ ]]; then
+        second="$4"
+    elif [[ "$4" =~ ^${validTC}$ ]]; then
+        second=$(convToFN $4 $fpsHz $fpsCalc)
+    else
+        echo "Timecode or FN error!" 1>&2
+        exit 6
+    fi
+    dropsForDay=$(( 86400 * $fpsCalc - (($fpsCalc / 15) * 1296) ))
+    if [ "$1" = "-a" ]; then  # add
+        sumFN=$(( $first + $second ))
+        if [ $fpsHz -eq 29 -o $fpsHz -eq 59 ]; then
+            sumFN=$(( $sumFN % $dropsForDay ))
+        else  # 24,25,30,60
+            sumFN=$(( $sumFN % (86400 * $fpsCalc) ))
+        fi
+    else  # sub
+        if [ $fpsHz -eq 29 -o $fpsHz -eq 59 ]; then
+            sumFN=$(( $first + $dropsForDay ))
+            sumFN=$(( $sumFN - $second ))
+            sumFN=$(( $sumFN % $dropsForDay ))
+        else  # 24,25,30,60
+            sumFN=$(( $first + (86400 * $fpsCalc) ))
+            sumFN=$(( $sumFN - $second ))
+            sumFN=$(( $sumFN % (86400 * $fpsCalc) ))
+        fi
+    fi
+    convToTC $sumFN $fpsHz $fpsCalc
+    exit 0
+else
+    echo "Argument \$1 error!" 1>&2
+    exit 7
+fi
+
+################################################################################
+############################################################ END OF THE CODE ###
+################################################################################
